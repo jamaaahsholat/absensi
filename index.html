@@ -32,7 +32,7 @@
   button:disabled { background: #9ca3af; cursor: not-allowed; }
   #btnBH { background: #fff; color: #ad1457; border: 2px solid #ad1457; margin-top: 10px; display: none; }
   #btnBH:disabled { color: #9ca3af; border-color: #d1d5db; background: #fff; }
-  #catatanBH { display: none; font-size: .78rem; color: var(--abu); text-align: center; margin: 6px 0 0; }
+  #catatanBH { display: none; font-size: .82rem; color: var(--abu); text-align: center; margin: 8px 0 0; line-height: 1.4; }
   .info { display: flex; gap: 10px; }
   .info div { flex: 1; text-align: center; background: #f9fafb; border-radius: 10px; padding: 10px 6px; }
   .info small { display: block; color: var(--abu); font-size: .75rem; }
@@ -41,7 +41,9 @@
   .ok { background: var(--hijau-muda); color: var(--hijau); display: block; }
   .gagal { background: var(--merah-muda); color: var(--merah); display: block; }
   .tunggu { background: var(--kuning-muda); color: var(--kuning); display: block; }
-  .dalam { color: var(--hijau); } .luar { color: var(--merah); }
+  .dalam { color: var(--hijau); } .luar { color: var(--merah); } .haid { color: #ad1457; }
+  #catatanBH.ok { color: var(--hijau); background: var(--hijau-muda); font-weight: 600; padding: 6px 8px; border-radius: 8px; }
+  #catatanBH.jauh { color: var(--merah); background: var(--merah-muda); font-weight: 600; padding: 6px 8px; border-radius: 8px; }
   footer { text-align: center; color: var(--abu); font-size: .75rem; padding-bottom: 20px; }
 </style>
 </head>
@@ -84,7 +86,7 @@
 
 <script>
 /* ==== GANTI dengan URL Web App dari Apps Script (berakhiran /exec) ==== */
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxCzpNusuP6SeVJyN2c22rOfrwdw-_2HRYuqvYqNXXLWuFYPMa_91m7CRGhtTKYWpRR/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzZldo53Xhhosg_v80FbdrX70eDlbJJveIOiahI06FkX3e-QWkWEtTNv6GUoi29_uJC/exec';
 
 let info = null;        // pengaturan dari server (koordinat masjid, radius, jam)
 let posisi = null;      // posisi GPS terakhir
@@ -124,14 +126,45 @@ function mulaiJam(jamServer) {
 }
 
 /* ---- Tampilkan jarak ke masjid (dipanggil saat GPS atau data server datang) ---- */
+/* Posisi tampil = rata-rata berbobot dari pembacaan paling akurat 30 detik terakhir (sama seperti server) */
+function posisiTerbaikKlien() {
+  const s = riwayat.filter(h => Date.now() - h.t < 30000);
+  if (!s.length) return posisi ? { lat: posisi.latitude, lng: posisi.longitude, acc: posisi.accuracy } : null;
+  const best = s.reduce((a, b) => (b.acc < a.acc ? b : a));
+  const pakai = s.filter(x => x.acc <= best.acc * 1.5 + 3);
+  let w = 0, lat = 0, lng = 0;
+  pakai.forEach(x => { const b = 1 / (x.acc * x.acc); w += b; lat += x.lat * b; lng += x.lng * b; });
+  return { lat: lat / w, lng: lng / w, acc: best.acc };
+}
 function tampilJarak() {
-  if (posisi) $('akurasi').textContent = '±' + Math.round(posisi.accuracy) + ' m';
-  if (posisi && info && info.masjid) {
-    const j = hitungJarak(posisi.latitude, posisi.longitude, info.masjid.lat, info.masjid.lng);
+  const p = posisiTerbaikKlien();
+  if (p) $('akurasi').textContent = '±' + Math.round(p.acc) + ' m';
+  if (p && info && info.masjid) {
+    const j = hitungJarak(p.lat, p.lng, info.masjid.lat, info.masjid.lng);
     $('jarak').textContent = Math.round(j) + ' m';
-    const dalam = j <= info.radius;
-    $('statusLokasi').textContent = dalam ? 'Di area' : 'Di luar';
-    $('statusLokasi').className = dalam ? 'dalam' : 'luar';
+    const longgar = Math.min(p.acc, info.toleransi || 0);
+    const dalam = j <= info.radius + longgar;                         // area jamaah
+    const rBH = info.radiusBerhalangan == null ? 50 : info.radiusBerhalangan;
+    const dalamBH = rBH === 0 || j <= rBH + longgar;                  // area berhalangan (haid)
+    const orang = daftarNama.find(s => s.nis === $('siswa').value);
+    const perempuan = !!(orang && orang.jk === 'P');
+    // Untuk perempuan: jika di luar area jamaah tapi masih di area berhalangan, jangan tampil "Di luar"
+    if (dalam) { $('statusLokasi').textContent = 'Di area'; $('statusLokasi').className = 'dalam'; }
+    else if (perempuan && dalamBH) { $('statusLokasi').textContent = 'Area haid'; $('statusLokasi').className = 'haid'; }
+    else { $('statusLokasi').textContent = 'Di luar'; $('statusLokasi').className = 'luar'; }
+    // Keterangan di bawah tombol Berhalangan
+    const cat = $('catatanBH');
+    if (rBH === 0) {
+      cat.textContent = 'Khusus yang sedang haid. Bisa dicatat dari mana saja, jam yang sama.';
+      cat.className = 'ok';
+    } else if (dalamBH) {
+      cat.textContent = '✓ Anda ' + Math.round(j) + ' m dari masjid: BISA mencatat Berhalangan (batas ' + rBH + ' m).';
+      cat.className = 'ok';
+    } else {
+      cat.textContent = '✗ Anda ' + Math.round(j) + ' m dari masjid. Berhalangan hanya bisa dalam ' + rBH +
+                        ' m: mendekat ke serambi/halaman masjid.';
+      cat.className = 'jauh';
+    }
   }
   cekTombol();
 }
@@ -143,10 +176,12 @@ function pantauLokasi() {
     return;
   }
   navigator.geolocation.watchPosition(pos => {
+    if (gpsAsliAktif) return;            // APK: pakai GPS asli dari LocationSensor
     posisi = pos.coords;
     simpanRiwayat(pos);
     tampilJarak();
   }, err => {
+    if (gpsAsliAktif) return;
     const teks = err.code === 1
       ? 'Izin lokasi ditolak. Izinkan akses lokasi untuk aplikasi ini di Pengaturan HP.'
       : 'Lokasi belum terbaca. Pastikan GPS aktif.';
@@ -200,7 +235,8 @@ function idPerangkat() {
   // 1) APK App Inventor: identitas dari TinyDB (permanen), dikirim lewat WebViewer.WebViewString
   try {
     if (window.AppInventor && typeof window.AppInventor.getWebViewString === 'function') {
-      const dariApk = String(window.AppInventor.getWebViewString() || '').replace(/\s+/g, '');
+      let dariApk = String(window.AppInventor.getWebViewString() || '').replace(/\s+/g, '');
+      if (dariApk.indexOf('|') >= 0) dariApk = dariApk.split('|').pop();   // format LOK|...|kodeHP
       if (/^[A-Za-z0-9-]{6,}$/.test(dariApk)) return dariApk;   // mis. HP-123..., HP123..., dll.
     }
   } catch (e) {}
@@ -221,11 +257,33 @@ function idPerangkat() {
 
 /* ---- Pembacaan GPS dikumpulkan sejak aplikasi dibuka (untuk deteksi lokasi palsu) ---- */
 let riwayat = [];   // pembacaan GPS terakhir {lat, lng, acc, t}
-function simpanRiwayat(p) {
-  if (riwayat.some(h => h.t === p.timestamp)) return;
-  riwayat.push({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: p.timestamp });
+function simpanRiwayat(p) { tambahSampel(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.timestamp); }
+function tambahSampel(lat, lng, acc, t) {
+  if (riwayat.some(h => h.t === t)) return;
+  riwayat.push({ lat, lng, acc, t });
   if (riwayat.length > 10) riwayat.shift();
 }
+
+/* ---- APK App Inventor: GPS asli dari LocationSensor dikirim lewat WebViewString ----
+   Format: LOK|lintang|bujur|akurasi|waktu(ms)|kode HP                                  */
+let gpsAsliAktif = false;
+function bacaGpsAsli() {
+  try {
+    if (!window.AppInventor || typeof window.AppInventor.getWebViewString !== 'function') return;
+    const t = String(window.AppInventor.getWebViewString() || '').replace(/\s+/g, '');
+    if (t.toUpperCase().indexOf('LOK|') !== 0) return;
+    const b = t.split('|').map(x => x.replace(',', '.'));   // HP berbahasa Indonesia bisa memakai koma desimal
+    const lat = Number(b[1]), lng = Number(b[2]), acc = Number(b[3]), wkt = Number(b[4]);
+    if (!isFinite(lat) || !isFinite(lng) || !isFinite(acc) || !isFinite(wkt) || !lat || !lng) return;
+    if (!gpsAsliAktif) riwayat = [];      // buang bacaan GPS WebView (kasar) begitu GPS asli tersedia
+    gpsAsliAktif = true;
+    tambahSampel(lat, lng, acc, wkt);
+    posisi = { latitude: lat, longitude: lng, accuracy: acc };
+    if (/Lokasi belum terbaca/.test($('pesan').textContent)) $('pesan').className = 'pesan';
+    tampilJarak();
+  } catch (e) {}
+}
+setInterval(bacaGpsAsli, 500);
 // Langsung kirim jika sudah ada >= 3 pembacaan baru; jika belum, tunggu paling lama 3 detik.
 function ambilSampel() {
   const segar = () => riwayat.filter(h => Date.now() - h.t < 90000);
@@ -277,9 +335,10 @@ async function absen(status) {
 /* ---- Mulai ---- */
 (async function init() {
   $('kelas').addEventListener('change', muatSiswa);
-  $('siswa').addEventListener('change', cekTombol);
+  $('siswa').addEventListener('change', tampilJarak);
   $('btnAbsen').addEventListener('click', () => absen('Hadir'));
-  setTimeout(() => { $('kodeHp').textContent = 'Kode HP: ' + idPerangkat() + ' · versi 5'; }, 500);
+  const tulisKode = () => { $('kodeHp').textContent = 'Kode HP: ' + idPerangkat() + ' · versi 6.1' + (gpsAsliAktif ? ' · GPS asli' : ''); };
+  setTimeout(tulisKode, 500); setInterval(tulisKode, 3000);
   $('btnBH').addEventListener('click', () => absen('Berhalangan'));
   pantauLokasi();
   try {
